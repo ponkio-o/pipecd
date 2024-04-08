@@ -83,6 +83,53 @@ func (c *Kubectl) Apply(ctx context.Context, kubeconfig, namespace string, manif
 	if err != nil {
 		return fmt.Errorf("failed to apply: %s (%w)", string(out), err)
 	}
+
+	// check the rollout status because the apply command does not check if the rollout actually succeeded.
+	err = c.checkRolloutStatus(ctx, kubeconfig, namespace, manifest)
+	if err != nil {
+		return fmt.Errorf("failed to check rollout status: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Kubectl) checkRolloutStatus(ctx context.Context, kubeconfig, namespace string, manifest Manifest) (err error) {
+	defer func() {
+		kubernetesmetrics.IncKubectlCallsCounter(
+			c.version,
+			kubernetesmetrics.LabelApplyCommand,
+			err == nil,
+		)
+	}()
+
+	data, err := manifest.YamlBytes()
+	if err != nil {
+		return err
+	}
+
+	args := make([]string, 0, 8)
+	if kubeconfig != "" {
+		args = append(args, "--kubeconfig", kubeconfig)
+	}
+	if namespace != "" {
+		args = append(args, "--namespace", namespace)
+	}
+
+	args = append(args, "rollout", "status", "-f", "-")
+
+	cmd := exec.CommandContext(ctx, c.execPath, args...)
+	r := bytes.NewReader(data)
+	cmd.Stdin = r
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to check rollout status: %s (%w)", string(out), err)
+	}
+
+	if strings.HasPrefix(string(out), "error") {
+		return fmt.Errorf("failed to rollout: %s", string(out))
+	}
+
 	return nil
 }
 
